@@ -26,7 +26,7 @@ class node():
         vkeys.sort()
         strings = []
         for i in range(len(self.mappings)):
-            oneset = [self.mappings[i][self.variables[v]] forv in vkeys]
+            oneset = [self.mappings[i][self.variables[v]] for v in vkeys]
             onestring = ' -> '.join(oneset)
             strings.append(onestring)
         return strings
