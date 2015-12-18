@@ -84,6 +84,7 @@ def convert_sugar_forms(molecule):
             smilesprod = Chem.MolToSmiles(p, isomericSmiles=True)
             if smilesprod not in seen:
                 pmol = Chem.MolFromSmiles(smilesprod)
+                pmol = Chem.AddHs(pmol)
                 seen.add(smilesprod)
                 rxnproducts.append(pmol)
     return rxnproducts
