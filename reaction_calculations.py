@@ -4,8 +4,9 @@ from rdkit import DataStructs
 from itertools import product
 from itertools import permutations
 from copy import copy
-import pybel
 import numpy as np
+import pybel
+import re
 
 def spam(n):
     out = []
@@ -107,8 +108,9 @@ class ligandData(object):
         self.smiles = smiles
         self.molecules = molecules
         self.reactions = reactions
-        self.fingerprints = None
+        self.fingerprints = {}
         self.linearforms = linearforms
+        self.linearmolecules = {}
         if smilesfile is not None:
             self.read_in_molecules(smilesfile=smilesfile,
                                    delimiter=delimiter,
@@ -139,6 +141,7 @@ class ligandData(object):
             molecules = {}
             lines = handle.readlines()
             smilesdict = {}
+            linearmolecules = {}
             for line in lines:
                 if delimiter is not None:
                     fields = line.strip().split(delimiter)
@@ -169,8 +172,15 @@ class ligandData(object):
                     molecules[identifier] = mol
                     smiles = Chem.MolToSmiles(mol, isomericSmiles=True)
                     smilesdict[identifier] = smiles
+                    m = Chem.AddHs(mol)
+                    if self.linearforms:
+                        ms = convert_sugar_forms(m)
+                    else:
+                        ms = [m]
+                    linearmolecules[identifier] = ms
             self.molecules = molecules
             self.smiles = smilesdict
+            self.linearmolecules = linearmolecules
 
     def read_in_smirks(self, smirksfilename):
         with open(smirksfilename, 'r') as handle:
@@ -183,11 +193,21 @@ class ligandData(object):
 
     def make_fingerprints(self):
         fingerprints = {}
-        for k in self.smiles.keys():
-            s = self.smiles[k]
-            rdkmol = Chem.MolFromSmiles(s)
-            fp = AllChem.GetMorganFingerprintAsBitVect(rdkmol, 2, useChirality=True)
-            fingerprints[k] = fp
+        for k in self.molecules.keys():
+            m = self.molecules[k]
+            m = Chem.AddHs(m)
+            if self.linearforms:
+                ms = convert_sugar_forms(m)
+            else:
+                ms = [m]
+
+            refs = []
+            for refmol in ms:
+                refs.extend(GetStereoIsomers(refmol))
+            refs = [Chem.RemoveHs(rdkmol) for rdkmol in refs]
+            refs = [Chem.MolFromSmiles(Chem.MolToSmiles(rdkmol, isomericSmiles=True)) for rdkmol in refs]
+            fps = [AllChem.GetMorganFingerprintAsBitVect(rdkmol, 2, useChirality=True) for rdkmol in refs]
+            fingerprints[k] = fps
         self.fingerprints = fingerprints
 
     def compute_match(self):
@@ -198,44 +218,52 @@ class ligandData(object):
             for f2 in self.fingerprints.keys():
                 fpA = self.fingerprints[f1]
                 fpB = self.fingerprints[f2]
-                sim = DataStructs.TanimotoSimilarity(fpA, fpB)
+                #sim = DataStructs.TanimotoSimilarity(fpA, fpB)
+                sim = getMaxTC(fpA, fpB)
                 ds[f2] = sim
             idxs.append(f1)
             dictlist.append(ds)
         return idxs, dictlist
+
+    def compare_metabolites_to_list(self, reffile):
+        ref_fps = {}
+        with open(reffile, 'r') as refhandle:
+            lines = refhandle.readlines()
+            for line in lines:
+
+                smiles = line.strip()
+                m = Chem.MolFromSmiles(smiles)
+                m = Chem.AddHs(m)
+                if self.linearforms:
+                    ms = convert_sugar_forms(m)
+                else:
+                    ms = [m] 
+                refs = []
+                for refmol in ms: 
+                    refs.extend(GetStereoIsomers(refmol))
+                refs = [Chem.RemoveHs(rdkmol) for rdkmol in refs]
+                refs = [Chem.MolFromSmiles(Chem.MolToSmiles(rdkmol, isomericSmiles=True)) for rdkmol in refs]
+                fps = [AllChem.GetMorganFingerprintAsBitVect(rdkmol, 2, useChirality=True) for rdkmol in refs]
+                ref_fps.append(fps)
+        tcdict = {}
+        for fpkey in self.fingerprints.keys():
+            maxtc = 0.0 
+            for ref_fp in ref_fps:
+                tc = getMaxTC(ref_fp, self.fingerprints[fpkey])
+                maxtc = max(tc, maxtc)
+            tcdict[fpkey] = maxtc
+        return tcdict
 
     def reaction_sets(self, reactionkey):
         idxs = []
         count = 0
         edges = []
 
-        isofpdict = {}
-        for j in self.molecules.keys():
-            m =  self.molecules[j]
-            m = Chem.AddHs(m)
-            if self.linearforms:
-                ms = convert_sugar_forms(m)
-            else:
-                ms = [m]
-            refs = []
-            for refmol in ms:
-                refs.extend(GetStereoIsomers(refmol))
-            refs = [Chem.RemoveHs(rdkmol) for rdkmol in refs]
-            refs = [Chem.MolFromSmiles(Chem.MolToSmiles(ref, isomericSmiles=True)) for ref in refs]
-            fps = [AllChem.GetMorganFingerprintAsBitVect(rdkmol, 2, useChirality=True) for rdkmol in refs]
-            isofpdict[j] = fps
-
         for k in self.molecules.keys():
             count += 1
             idxs.append(k)
             fps = []
-            m = self.molecules[k]
-            reactantmol = Chem.AddHs(m)
-            if self.linearforms:
-                rs = convert_sugar_forms(reactantmol)
-            else:
-                rs = [reactantmol]
-
+            rs = self.linearmolecules[k]
             for reaction in self.reactions[reactionkey]:
                 rdk_rxn = AllChem.ReactionFromSmarts(reaction)
                 
@@ -250,11 +278,11 @@ class ligandData(object):
                         cfps = [AllChem.GetMorganFingerprintAsBitVect(pm, 2, useChirality=True) for pm in pmols]
                         fps.extend(cfps)
                 
-            for j in isofpdict.keys():
-                score = getMaxTC(isofpdict[j], fps)
-                if score == 1.0:
-                    edges.append([k, j])
-
+            if len(fps) > 0:
+                for j in self.fingerprints.keys():
+                    score = getMaxTC(self.fingerprints[j], fps)
+                    if score == 1.0:
+                        edges.append([k, j])
         return edges
 
     def write_possible_reaction_sets(self, textfile):
@@ -265,4 +293,72 @@ class ligandData(object):
                 for edge in edges:
                     handle.write('%s, %s, %s\n' % (key, edge[0], edge[1]))
 
+    def set_dock_scores_pd(self, scoresfile, reactionkey):
+        ligdict = {}
+        with open(scoresfile, 'r') as handle:
+            lines = handle.readlines()
+            allscores = []
+            for line in lines:
+                fields = line.split()
+                if len(fields) > 1:
+                    val = float(fields[6])
+                    if val <= 0.0:
+                        allscores.append(val)
+            nar = np.array(allscores)
+            mean = np.mean(nar)
+            std = np.std(nar)
+            max = np.max(nar)
+
+            for i in self.molecules.keys():
+                score = 0
+                pattern = i.lstrip('ZINC')
+                match = re.compile(pattern)
+                for line in lines:
+                    if re.search(match, line):
+                        fields = line.split()
+                        if len(fields) > 1:
+                            val = float(fields[6])
+                            if val <=0.0:
+                                score = (val-mean)/std
+                            else:
+                                score = (max-mean)/std
+                ligdict[i] = -score
+        return ligdict
+
+    # returns a dictionary {molecule id: docking score} for a given enzyme
+    def set_scores_pd(self, scoresfile, reactionkey, delimiter=';', dmean=None, dstd=None):
+        ligdict = {}
+        scores = []
+        with open(scoresfile, 'r') as handle:
+            lines = handle.readlines()
+        if not dmean:
+            for line in lines:
+                if not line.startswith('#'):
+                    fields = line.split(delimiter)
+                    scores.append(float(fields[1]))
+            nar = np.array(scores)
+            dmean = np.mean(nar)
+            dstd = np.std(nar)
+            maxscore = np.max(nar)
+        else:
+            maxscore = dmean
+
+        for line in lines:
+            fields = line.split(delimiter)
+            if len(fields) > 1:
+                #ligandid = fields[0].split('_')[0]
+                ligandid = fields[0].split('_')[0]
+                score = float(fields[1])
+                if line.startswith('#'):
+                    ligandid = ligandid.strip('#')
+                    ligdict[ligandid] = -(maxscore - dmean)/dstd
+                else:
+                    zscore = -(score - dmean)/dstd
+                    if ligandid in ligdict.keys():
+                        zscore = np.max([zscore, ligdict[ligandid]])
+                    ligdict[ligandid] = zscore
+        for i in self.molecules.keys():
+            if i not in ligdict.keys():
+                ligdict[i] = 0.
+        return ligdict
 
