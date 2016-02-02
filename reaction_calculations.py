@@ -4,9 +4,12 @@ from rdkit import DataStructs
 from itertools import product
 from itertools import permutations
 from copy import copy
+from tables import open_file
 import numpy as np
-import pybel
-import re
+import pandas as pd
+import pybel  # Remove dependency on pybel eventually?
+import sys
+import math
 
 def spam(n):
     out = []
@@ -100,6 +103,28 @@ def getMaxTC(fps1, fps2):
             return tc
         tcs.append(tc)
     return np.max(tcs)
+
+def adjustment_factor_for_sea_data(seadf, proteins, maxcutoff=50.):
+    seacopy = seadf.copy()
+    for i in proteins:
+        sea_ii = seadf.get_value(i, i)
+        for j in proteins:
+            sea_jj = seadf.get_value(j, j)
+            normfactor = (1./maxcutoff)*min(sea_ii, sea_jj)
+            seacopy[j][i] = seadf.get_value(i, j)*normfactor
+    return seacopy
+
+####################################################################
+#
+# Calculate the sea score for a pathway using the scores from the dataframe
+# Input: pathway - a list of proteins in order of the pathway
+#        df - a pandas dataframe with the sea scores
+# Output: sea score
+def calc_sea_score(pathway, df):
+    scores = [df.get_value(pathway[p], pathway[p+1]) for p in range(len(pathway) - 1)]
+    return sum(scores)
+
+
 
 class ligandData(object):
     
@@ -226,7 +251,7 @@ class ligandData(object):
         return idxs, dictlist
 
     def compare_metabolites_to_list(self, reffile):
-        ref_fps = {}
+        ref_fps = []
         with open(reffile, 'r') as refhandle:
             lines = refhandle.readlines()
             for line in lines:
@@ -293,8 +318,8 @@ class ligandData(object):
                 for edge in edges:
                     handle.write('%s, %s, %s\n' % (key, edge[0], edge[1]))
 
-    def set_dock_scores_pd(self, scoresfile, reactionkey):
-        ligdict = {}
+    def set_dock_scores_pd(self, scoresfile, reactionkey, idprefix='ZINC'):
+        ligdict = {i:0.0 for i in self.molecules.keys()}
         with open(scoresfile, 'r') as handle:
             lines = handle.readlines()
             allscores = []
@@ -309,20 +334,20 @@ class ligandData(object):
             std = np.std(nar)
             max = np.max(nar)
 
-            for i in self.molecules.keys():
-                score = 0
-                pattern = i.lstrip('ZINC')
-                match = re.compile(pattern)
-                for line in lines:
-                    if re.search(match, line):
-                        fields = line.split()
-                        if len(fields) > 1:
-                            val = float(fields[6])
-                            if val <=0.0:
-                                score = (val-mean)/std
-                            else:
-                                score = (max-mean)/std
-                ligdict[i] = -score
+            ms = []
+            for line in lines:
+                fields = line.split()
+                if len(fields) > 1:
+                    molid = fields[0].strip('C')
+                    molid = '%s%s' % (idprefix, molid)
+                    val = float(fields[6])
+                    if val <= 0.0:
+                        score = (val-mean)/std
+                    else:
+                        score = (max-mean)/std
+                    if molid in self.molecules.keys():
+                        ms.append(molid)
+                        ligdict[molid] = -score
         return ligdict
 
     # returns a dictionary {molecule id: docking score} for a given enzyme
@@ -362,3 +387,147 @@ class ligandData(object):
                 ligdict[i] = 0.
         return ligdict
 
+    def get_sea_dict_from_file(self, seafile):
+        cutoff = 50
+        enz_idxs = []
+        allscores_nonmatch = []
+        dictlist = []
+        with open(seafile, 'r') as handle:
+            lines = handle.readlines()
+
+            # Remove header
+            if lines[0].startswith('target'):
+                lines.pop(0)
+
+            # Get enzyme ids and best and worst scores
+            for line in lines:
+                fields = line.split(',')
+                if len(fields) > 1 and fields[0] != fields[1]:
+                    try:
+                        num = float(fields[2])
+                        val = -np.log10(float(fields[2]))
+                        if math.isnan(val):
+                            val = 0.
+                        if val > cutoff:
+                            val = cutoff
+                        #if val < 0:
+                        #    val = 0.
+                        allscores_nonmatch.append(val)
+                        enz_idxs.append(fields[0])
+                    except Exception as e:
+                        print "Error reading in e-value: %s" % (fields[2])
+                        print "Errors: ", sys.exc_info()[0], e
+
+            nar = np.array(allscores_nonmatch)
+            best = nar.max()
+            worst = nar.min()
+
+            enz_idxs = list(set(enz_idxs))
+            ds = {}
+            for e in enz_idxs:
+                ds[e] = {}
+
+            for line in lines:
+                fields = line.split(',')
+                val = 1.
+                if len(fields) > 1:
+                    val = -np.log10(float(fields[2]))
+                    if math.isnan(val):
+                        val = 0.
+                    if val > cutoff:
+                        val = cutoff
+                    #if val < 0.:
+                    #    val = 0.
+                    #val = (val-worst)/(best-worst)
+                    #val = min(val, 1.0)
+                ds[fields[0]][fields[1]] = val
+
+            for e in enz_idxs:
+                dictlist.append(ds[e])
+
+        return enz_idxs, dictlist
+
+    ######################################################################
+    # Docking scores
+    # 
+    # Save a pandas dataframe associating docking scores between 
+    # molecules and enzymes
+    # Input: Dictionary of enzymes (keys) and filenames (values)
+    #
+    ######################################################################
+    def save_docking_scores(self, dockfiles, datafile):
+        ld = []
+        enz = []
+        for key in dockfiles.keys():
+            ld.append(self.set_dock_scores_pd(dockfiles[key], key))
+            enz.append(key)
+        dockscores = pd.DataFrame(ld, index=enz)
+        dockscores.to_hdf(datafile, 'dock')
+        print 'Docking scores saved'
+
+                                       
+    ######################################################################
+    # SEA scores
+    # 
+    # Save computed z-scores for SEA pathway scores
+    # Input: File with pairwise SEA scores, datafile for saving Z-scores,
+    #        list of pathway proteins
+    #
+    ######################################################################
+    def save_sea_scores(self, seafile, datafile, proteinlist=[]):
+        elist, dlist = self.get_sea_dict_from_file(seafile)
+        seavals = pd.DataFrame(dlist, index=elist)
+        seavals = adjustment_factor_for_sea_data(seavals, elist)
+        seavals.to_hdf(datafile, 'sea')
+        if len(proteinlist) == 0:
+            proteinlist = elist[:]
+        seascores = [calc_sea_score(pathway, seavals) for pathway in permutations(proteinlist, len(proteinlist))]
+        smu = np.mean(seascores)
+        ssd = np.std(seascores)
+
+        with open_file(datafile, 'a') as h5data:
+            h5data.root.sea.block0_values.attrs.seamean = smu
+            h5data.root.sea.block0_values.attrs.seastd = ssd
+
+        print 'Sea scores saved'
+
+    def save_thermofluor_scores(self, tffile, datafile, transporter='0'):
+        tcdict = self.compare_metabolites_to_list(tffile)
+        df = pd.DataFrame(tcdict, index=[transporter])
+        meantc = np.mean(df.values)
+        stdtc = np.mean(df.values)
+        zscorefxn = lambda x: (x - meantc)/stdtc
+        df = df.apply(zscorefxn)
+        df.to_hdf(datafile, 'tfluor')
+
+        print 'Thermofluor scores saved'
+
+    def save_evidence_scores(self, evidencedict, datafile):
+        enzdict = {}
+        for e in evidencedict.keys():
+            tcdict = self.compare_metabolites_to_list(evidencedict[e])
+            series = pd.Series(tcdict)
+            meantc = np.mean(series.values)
+            stdtc = np.std(series.values)
+            zscorefxn = lambda x : (x - meantc)/stdtc
+            series = series.apply(zscorefxn)
+            enzdict[e] = series
+        df = pd.DataFrame(enzdict)
+        df.to_hdf(datafile, 'evidence')
+
+        print 'Evidence scores saved'
+
+    def save_central_metabolism_endpt_scores(self, cmetabfile, datafile):
+        tcdict = self.compare_metabolites_to_list(cmetabfile)
+        series = pd.Series(tcdict)
+        meantc = np.mean(series.values)
+        stdtc = np.std(series.values)
+        zscorefxn = lambda x: (x - meantc)/stdtc
+        series = series.apply(zscorefxn)
+        series.to_hdf(datafile, 'cmetab')
+
+        print 'Central metabolism scores saved'
+
+    def save_smiles(self, datafile):
+        smileseries = pd.Series(self.smiles)
+        smileseries.to_hdf(datafile, 'smiles')
