@@ -125,14 +125,13 @@ def calc_sea_score(pathway, df):
     return sum(scores)
 
 
-
 class ligandData(object):
     
-    def __init__(self, smilesfile=None, smirksfile=None, reactions={}, smiles={},
+    def __init__(self, datafile=None, smilesfile=None, smiles={},
                  molecules={}, delimiter=None, linearforms=True):
+        self.datafile = datafile
         self.smiles = smiles
         self.molecules = molecules
-        self.reactions = reactions
         self.fingerprints = {}
         self.linearforms = linearforms
         self.linearmolecules = {}
@@ -142,8 +141,6 @@ class ligandData(object):
                                    linearforms=linearforms)
             print 'Number of molecules: %d' % len(self.molecules)
             self.make_fingerprints()
-        if smirksfile is not None:
-            self.read_in_smirks(smirksfile)
 
         
     def read_in_smiles(self, smilesfilename, delimiter=None):
@@ -206,15 +203,6 @@ class ligandData(object):
             self.molecules = molecules
             self.smiles = smilesdict
             self.linearmolecules = linearmolecules
-
-    def read_in_smirks(self, smirksfilename):
-        with open(smirksfilename, 'r') as handle:
-            reactions = {}
-            lines = handle.readlines()
-            for line in lines:
-                fields = lines.strip().split()
-                reactions[fields[1]] = fields[2]
-            self.reactions = reactions
 
     def make_fingerprints(self):
         fingerprints = {}
@@ -279,7 +267,7 @@ class ligandData(object):
             tcdict[fpkey] = maxtc
         return tcdict
 
-    def reaction_sets(self, reactionkey):
+    def reaction_sets(self, reactions):
         idxs = []
         count = 0
         edges = []
@@ -289,7 +277,7 @@ class ligandData(object):
             idxs.append(k)
             fps = []
             rs = self.linearmolecules[k]
-            for reaction in self.reactions[reactionkey]:
+            for reaction in reactions:
                 rdk_rxn = AllChem.ReactionFromSmarts(reaction)
                 
                 for r in rs:
@@ -310,11 +298,12 @@ class ligandData(object):
                         edges.append([k, j])
         return edges
 
-    def write_possible_reaction_sets(self, textfile):
+    def write_possible_reaction_sets(self, reactiondict, textfile):
         with open(textfile, 'w') as handle:
-            for key in self.reactions.keys():
+            for key in reactiondict.keys():
                 print key
-                edges = self.reaction_sets(key)
+                reactions = reactiondict[key]
+                edges = self.reaction_sets(reactions)
                 for edge in edges:
                     handle.write('%s, %s, %s\n' % (key, edge[0], edge[1]))
 
@@ -455,14 +444,14 @@ class ligandData(object):
     # Input: Dictionary of enzymes (keys) and filenames (values)
     #
     ######################################################################
-    def save_docking_scores(self, dockfiles, datafile):
+    def save_docking_scores(self, dockfiles):
         ld = []
         enz = []
         for key in dockfiles.keys():
             ld.append(self.set_dock_scores_pd(dockfiles[key], key))
             enz.append(key)
         dockscores = pd.DataFrame(ld, index=enz)
-        dockscores.to_hdf(datafile, 'dock')
+        dockscores.to_hdf(self.datafile, 'dock')
         print 'Docking scores saved'
 
                                        
@@ -470,39 +459,39 @@ class ligandData(object):
     # SEA scores
     # 
     # Save computed z-scores for SEA pathway scores
-    # Input: File with pairwise SEA scores, datafile for saving Z-scores,
+    # Input: File with pairwise SEA scores and
     #        list of pathway proteins
     #
     ######################################################################
-    def save_sea_scores(self, seafile, datafile, proteinlist=[]):
+    def save_sea_scores(self, seafile, proteinlist=[]):
         elist, dlist = self.get_sea_dict_from_file(seafile)
         seavals = pd.DataFrame(dlist, index=elist)
         seavals = adjustment_factor_for_sea_data(seavals, elist)
-        seavals.to_hdf(datafile, 'sea')
+        seavals.to_hdf(self.datafile, 'sea')
         if len(proteinlist) == 0:
             proteinlist = elist[:]
         seascores = [calc_sea_score(pathway, seavals) for pathway in permutations(proteinlist, len(proteinlist))]
         smu = np.mean(seascores)
         ssd = np.std(seascores)
 
-        with open_file(datafile, 'a') as h5data:
+        with open_file(self.datafile, 'a') as h5data:
             h5data.root.sea.block0_values.attrs.seamean = smu
             h5data.root.sea.block0_values.attrs.seastd = ssd
 
         print 'Sea scores saved'
 
-    def save_thermofluor_scores(self, tffile, datafile, transporter='0'):
+    def save_thermofluor_scores(self, tffile, transporter='0'):
         tcdict = self.compare_metabolites_to_list(tffile)
         df = pd.DataFrame(tcdict, index=[transporter])
         meantc = np.mean(df.values)
         stdtc = np.mean(df.values)
         zscorefxn = lambda x: (x - meantc)/stdtc
         df = df.apply(zscorefxn)
-        df.to_hdf(datafile, 'tfluor')
+        df.to_hdf(self.datafile, 'tfluor')
 
         print 'Thermofluor scores saved'
 
-    def save_evidence_scores(self, evidencedict, datafile):
+    def save_evidence_scores(self, evidencedict):
         enzdict = {}
         for e in evidencedict.keys():
             tcdict = self.compare_metabolites_to_list(evidencedict[e])
@@ -513,21 +502,36 @@ class ligandData(object):
             series = series.apply(zscorefxn)
             enzdict[e] = series
         df = pd.DataFrame(enzdict)
-        df.to_hdf(datafile, 'evidence')
+        df.to_hdf(self.datafile, 'evidence')
 
         print 'Evidence scores saved'
 
-    def save_central_metabolism_endpt_scores(self, cmetabfile, datafile):
+    def save_central_metabolism_endpt_scores(self, cmetabfile):
         tcdict = self.compare_metabolites_to_list(cmetabfile)
         series = pd.Series(tcdict)
         meantc = np.mean(series.values)
         stdtc = np.std(series.values)
         zscorefxn = lambda x: (x - meantc)/stdtc
         series = series.apply(zscorefxn)
-        series.to_hdf(datafile, 'cmetab')
+        series.to_hdf(self.datafile, 'cmetab')
 
         print 'Central metabolism scores saved'
 
-    def save_smiles(self, datafile):
+    def save_smiles(self):
         smileseries = pd.Series(self.smiles)
-        smileseries.to_hdf(datafile, 'smiles')
+        smileseries.to_hdf(self.datafile, 'smiles')
+
+    def save_reaction_sets(self, reactiondict):
+        rows = []
+        for key in reactiondict.keys():
+            rxns = reactiondict[key]
+            edges = self.reaction_sets(rxns)
+            curr_row = [(key, edge[0], edge[1]) for edge in edges]
+            rows.extend(curr_row)
+        df = pd.DataFrame(rows, columns=['enzyme', 'substrate', 'product'])
+        df.to_hdf(self.datafile, 'reactions')
+
+        print 'Reaction sets saved'
+
+        
+

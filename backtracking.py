@@ -16,6 +16,7 @@ class node():
         return string.strip()
 
     def write_pickle(self, picklefile):
+        import pickle
         list_of_strings = str(self).split('\n')
         with open(picklefile, 'w') as handle:
             pickle.dump(list_of_strings, handle)
@@ -96,4 +97,43 @@ def make_merge(nodelist):
         print 'Number of solutions: %d' % len(intermed.mappings)
         return intermed
 
+def read_in_reactions(filename):
+    rxns = []
+    with open(filename, 'r') as handle:
+        lines = handle.readlines()
+        for line in lines:
+            myline = line.split(',')
+            e = myline[0].strip()
+            s = myline[1].strip()
+            p = myline[2].strip()
+            rxns.append([s, e, p])
+    return rxns
+
+def read_in_reactions_df(datafile):
+    import pandas as pd
+    df = pd.read_hdf(datafile, 'reactions')
+    rxns = [(df['substrate'][i], df['enzyme'][i], df['product'][i]) for i in df.index]
+    return rxns
+
+def enumerate_pathways(rxns, length, picklefile, minlength=None):
+    if minlength is None:
+        minlength = length
+
+    variables = [{2*n:0, 2*n+1:1, 2*n+2:2} for n in range(length)]
+    nodelist = [node(v, rxns) for v in variables]
+    currsol = make_merge(nodelist[0:minlength])
+
+    solutions = []
+    nodelist_partial = nodelist[minlength::]
+    solutions = currsol.get_solutions()
+
+    for y in nodelist_partial:
+        mergelist = [currsol, y]
+        currsol = make_merge(mergelist)
+        solutions.extend(currsol.get_solutions())
+
+    if len(solutions) > 0:
+        with open(picklefile, 'w') as handle:
+            print 'Writing %d pathway solutions to %s' % (len(solutions), picklefile)
+            pickle.dump(solutions, handle)
 
