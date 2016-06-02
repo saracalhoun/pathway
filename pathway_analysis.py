@@ -39,9 +39,14 @@ def cluster_pathways(solutions, threshold=0.2):
     splitsols = [s.split(' -> ') for s in solutions['strrepr']]
     #splitsols = [s.split(' -> ') for s in solutions]
     flatcl = make_clusters(splitsols, threshold=threshold)
-    flatcl_dict = {i: flatcl[i] for i in range(len(flatcl))}
+    flatcl_dict = {}
+    for i in range(len(flatcl)):
+        flatcl_dict[i] = flatcl[i]
     porder = sorted(range(len(splitsols)), key=lambda j: flatcl_dict[j])
-    sub_groups = {k:[] for k in range(1, 1+max(flatcl))}
+    #sub_groups = {k:[] for k in range(1, 1+max(flatcl))}
+    sub_groups = {}
+    for k in range(1, 1+max(flatcl)):
+        sub_groups[k] = []
     reprclusters = {}
     for i in porder:
         path = solutions['strrepr'][i]
