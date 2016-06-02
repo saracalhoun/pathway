@@ -7,7 +7,7 @@ from copy import copy
 from tables import open_file
 import numpy as np
 import pandas as pd
-import pybel  # Remove dependency on pybel eventually?
+#import pybel  # Remove dependency on pybel eventually?
 import sys
 import math
 
@@ -153,7 +153,8 @@ class ligandData(object):
                 else:
                     fields = line.strip().split()
                 fields = [f.strip() for f in fields]
-                smiles_string = pybel.readstring('smi', fields[0]).write('can')
+                #smiles_string = pybel.readstring('smi', fields[0]).write('can')
+                smiles_string = Chem.MolToSmiles(Chem.MolFromSmiles(fields[0]), True)
                 smiles[fields[1]] = smiles_string
             self.smiles = smiles
 
@@ -284,13 +285,18 @@ class ligandData(object):
                     rxn_products = rdk_rxn.RunReactants((r,))
                     
                     for rxn_p in traverse(rxn_products):
-                        rxn_p_noH = Chem.RemoveHs(rxn_p)
-                        pstereos = GetStereoIsomers(rxn_p_noH)
-                        smis = [Chem.MolToSmiles(p, isomericSmiles=True) for p in pstereos]
-                        pmols = [Chem.MolFromSmiles(s) for s in smis]
-                        cfps = [AllChem.GetMorganFingerprintAsBitVect(pm, 2, useChirality=True) for pm in pmols]
-                        fps.extend(cfps)
+                        try:
+                            rxn_p_noH = Chem.RemoveHs(rxn_p)
+                            pstereos = GetStereoIsomers(rxn_p_noH)
+                            smis = [Chem.MolToSmiles(p, isomericSmiles=True) for p in pstereos]
+                            pmols = [Chem.MolFromSmiles(s) for s in smis]
+                            cfps = [AllChem.GetMorganFingerprintAsBitVect(pm, 2, useChirality=True) for pm in pmols]
+                            fps.extend(cfps)
                 
+                        except Exception, e:
+                            sys.stderr.write('ERROR: %s\n\t%s' % (str(e), k))
+
+                            
             if len(fps) > 0:
                 for j in self.fingerprints.keys():
                     score = getMaxTC(self.fingerprints[j], fps)
@@ -308,7 +314,11 @@ class ligandData(object):
                     handle.write('%s, %s, %s\n' % (key, edge[0], edge[1]))
 
     def set_dock_scores_pd(self, scoresfile, reactionkey, idprefix='ZINC'):
-        ligdict = {i:0.0 for i in self.molecules.keys()}
+        ligdict = {}
+        #ligdict = {i:0.0 for i in self.molecules.keys()}
+        for i in self.molecules.keys():
+            ligdict[i] = 0.0
+
         with open(scoresfile, 'r') as handle:
             lines = handle.readlines()
             allscores = []
@@ -525,6 +535,9 @@ class ligandData(object):
         rows = []
         for key in reactiondict.keys():
             rxns = reactiondict[key]
+            print key
+            for r in rxns:
+                print '', r
             edges = self.reaction_sets(rxns)
             curr_row = [(key, edge[0], edge[1]) for edge in edges]
             rows.extend(curr_row)
