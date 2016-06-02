@@ -313,7 +313,6 @@ class ligandData(object):
                 for edge in edges:
                     handle.write('%s, %s, %s\n' % (key, edge[0], edge[1]))
 
-
     def set_dock_scores_pd(self, scoresfile, reactionkey, idprefix='ZINC', id_column=1, score_column=7):
         ligdict = {i:0.0 for i in self.molecules.keys()}
         with open(scoresfile, 'r') as handle:
