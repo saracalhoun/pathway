@@ -89,18 +89,18 @@ def get_solution_subset(ref_proteins, solutions, keepsub=False):
 def load_pathway_scores(h5out):
     from tables import open_file
     
-    path = np.dtype([('obj', np.float32), ('strrepr', np.str_, 200)])
+    path = np.dtype([('obj', np.float64), ('strrepr', np.str_, 200)])
     with open_file(h5out, 'r') as h5handle:
         table = h5handle.root.paths.pathTable
         prs = [(row['obj'], row['strrepr']) for row in table.iterrows()]
     np_path_array = np.array(prs, dtype=path)
     return np_path_array
 
-def filter_good_scoring_solutions(patharray, num_stdevs=1):
+def filter_good_scoring_solutions(patharray, num_stdevs=1.):
     st = np.std(patharray['obj'])
     maxscore = np.max(patharray['obj'])
     cu = maxscore - num_stdevs*st
     good_solutions = patharray[patharray['obj'] >= cu]
-    print '%d paths filtered down to %d within %d standard deviation(s)' % (len(patharray), len(good_solutions), num_stdevs)
+    print '%d paths filtered down to %d within %.1f standard deviation(s)' % (len(patharray), len(good_solutions), num_stdevs)
     return good_solutions
 
