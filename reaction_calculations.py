@@ -313,19 +313,17 @@ class ligandData(object):
                 for edge in edges:
                     handle.write('%s, %s, %s\n' % (key, edge[0], edge[1]))
 
-    def set_dock_scores_pd(self, scoresfile, reactionkey, idprefix='ZINC'):
-        ligdict = {}
-        #ligdict = {i:0.0 for i in self.molecules.keys()}
+
+    def set_dock_scores_pd(self, scoresfile, reactionkey, idprefix='ZINC', id_column=1, score_column=7):
         for i in self.molecules.keys():
             ligdict[i] = 0.0
-
         with open(scoresfile, 'r') as handle:
             lines = handle.readlines()
             allscores = []
             for line in lines:
                 fields = line.split()
                 if len(fields) > 1:
-                    val = float(fields[6])
+                    val = float(fields[score_column-1])
                     if val <= 0.0:
                         allscores.append(val)
             nar = np.array(allscores)
@@ -337,9 +335,9 @@ class ligandData(object):
             for line in lines:
                 fields = line.split()
                 if len(fields) > 1:
-                    molid = fields[0].strip('C')
+                    molid = fields[id_column-1].strip('C')
                     molid = '%s%s' % (idprefix, molid)
-                    val = float(fields[6])
+                    val = float(fields[score_column-1])
                     if val <= 0.0:
                         score = (val-mean)/std
                     else:
