@@ -94,6 +94,7 @@ def load_pathway_scores(h5out):
         table = h5handle.root.paths.pathTable
         prs = [(row['obj'], row['strrepr']) for row in table.iterrows()]
     np_path_array = np.array(prs, dtype=path)
+    np_path_array = np.sort(np_path_array, order='obj')[::-1]
     return np_path_array
 
 def filter_good_scoring_solutions(patharray, num_stdevs=1.):
