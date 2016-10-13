@@ -128,12 +128,13 @@ def calc_sea_score(pathway, df):
 class ligandData(object):
     
     def __init__(self, datafile=None, smilesfile=None, smiles={},
-                 molecules={}, delimiter=None, linearforms=True):
+                 molecules={}, delimiter=None, linearforms=True, keepmultiples=False):
         self.datafile = datafile
         self.smiles = smiles
         self.molecules = molecules
         self.fingerprints = {}
         self.linearforms = linearforms
+        self.keepmultiples = keepmultiples
         self.linearmolecules = {}
         if smilesfile is not None:
             self.read_in_molecules(smilesfile=smilesfile,
@@ -142,7 +143,7 @@ class ligandData(object):
             print 'Number of molecules: %d' % len(self.molecules)
             self.make_fingerprints()
 
-        
+    # Possibly deprecated, need to check    
     def read_in_smiles(self, smilesfilename, delimiter=None):
         with open(smilesfilename, 'r') as handle:
             smiles = {}
@@ -170,6 +171,11 @@ class ligandData(object):
                     fields = line.strip().split(delimiter)
                 else:
                     fields = line.strip().split()
+                if self.keepmultiples:
+                    identifier = fields[1].strip()
+                else:
+                    identifier = fields[1].split('_')[0]
+                
                 smiles = fields[0].strip()
                 mol = Chem.MolFromSmiles(smiles)
 
@@ -190,7 +196,6 @@ class ligandData(object):
                 #        molecules[identifier] = mol
                 #    smiles = pybel.readstring('smi', smiles).write('can')
                 #    smilesdict[identifier] = smiles
-                identifier = fields[1].strip()
                 if identifier not in molecules.keys():
                     molecules[identifier] = mol
                     smiles = Chem.MolToSmiles(mol, isomericSmiles=True)
@@ -304,6 +309,52 @@ class ligandData(object):
                         edges.append([k, j])
         return edges
 
+    # Input: list of reactions
+    # Output: Pandas DataFrame with molecules as indices and columns
+    #         and tanimoto coefficients as values
+    def reaction_calculations(self, reactions):
+        list_of_dicts = []
+        idxs = []
+        count = 0
+        edges = []
+
+        for k in self.molecules.keys():
+            count += 1
+            fps = []
+            rs = self.linearmolecules[k]
+            
+            # Perform each reaction in list on the molecule
+            for reaction in reactions:
+                rdk_rxn = AllChem.ReactionFromSmarts(reaction)
+
+                for r in rs:
+                    rxn_products = rdk_rxn.RunReactants((r,))
+
+                    for rxn_p in traverse(rxn_products):
+                        try:
+                            rxn_p_noH = Chem.RemoveHs(rxn_p)
+                            pstereos = GetStereoIsomers(rxn_p_noH)
+                            smis = [Chem.MolToSmiles(p, isomericSmiles=True) for p in pstereos]
+                            pmols = [Chem.MolFromSmiles(s) for s in smis]
+                            cfps = [AllChem.GetMorganFingerprintAsBitVect(pm, 2, useChirality=True) for pm in pmols]
+                            fps.extend(cfps)
+
+                        except Exception, e:
+                            sys.stderr.write('ERROR: %s\n\t%s' % (str(e), k))
+
+            # Calculate tanimoto coefficients between molecule and all other molecules
+            dict2 = {}
+            for j in self.fingerprints.keys():
+                fpr = self.fingerprints[j]
+                score = getMaxTC(fpr, fps)
+                dict2[j] = score
+
+            list_of_dicts.append(dict2)
+            idxs.append(k)
+
+        df = pd.DataFrame(list_of_dicts, index=idxs)
+        return df
+
     def write_possible_reaction_sets(self, reactiondict, textfile):
         with open(textfile, 'w') as handle:
             for key in reactiondict.keys():
@@ -314,7 +365,8 @@ class ligandData(object):
                     handle.write('%s, %s, %s\n' % (key, edge[0], edge[1]))
 
     def set_dock_scores_pd(self, scoresfile, reactionkey, idprefix='ZINC', id_column=1, score_column=7):
-        ligdict = {i:0.0 for i in self.molecules.keys()}
+        ligdict = {}
+
         with open(scoresfile, 'r') as handle:
             lines = handle.readlines()
             allscores = []
@@ -322,27 +374,36 @@ class ligandData(object):
                 fields = line.split()
                 if len(fields) > 1:
                     val = float(fields[score_column-1])
-                    if val <= 0.0:
-                        allscores.append(val)
+                    allscores.append(val)
+                    #if val <= 0.0:
+                    #    allscores.append(val)
             nar = np.array(allscores)
             mean = np.mean(nar)
             std = np.std(nar)
-            max = np.max(nar)
+            maxscore = np.max(nar)
 
             ms = []
             for line in lines:
                 fields = line.split()
                 if len(fields) > 1:
-                    molid = fields[id_column-1].strip('C')
+                    #molid = fields[id_column-1].strip('C').strip()
+                    molid = fields[id_column-1].strip()
                     molid = '%s%s' % (idprefix, molid)
+                    
+                    if not self.keepmultiples:
+                        molid = molid.split('_')[0]
+
                     val = float(fields[score_column-1])
-                    if val <= 0.0:
-                        score = (val-mean)/std
-                    else:
-                        score = (max-mean)/std
+                    score = -(val-mean)/std
                     if molid in self.molecules.keys():
                         ms.append(molid)
-                        ligdict[molid] = -score
+                        if molid in ligdict.keys():
+                            score = np.max([score, ligdict[molid]])
+                        ligdict[molid] = score
+
+        for i in self.molecules.keys():
+            if i not in ligdict.keys():
+                ligdict[i] = 0
         return ligdict
 
     # returns a dictionary {molecule id: docking score} for a given enzyme
@@ -367,7 +428,10 @@ class ligandData(object):
             fields = line.split(delimiter)
             if len(fields) > 1:
                 #ligandid = fields[0].split('_')[0]
-                ligandid = fields[0].split('_')[0]
+                if self.keepmultiples:
+                    ligandid = fields[0]
+                else:
+                    ligandid = fields[0].split('_')[0]
                 score = float(fields[1])
                 if line.startswith('#'):
                     ligandid = ligandid.strip('#')
@@ -450,17 +514,43 @@ class ligandData(object):
     # Input: Dictionary of enzymes (keys) and filenames (values)
     #
     ######################################################################
-    def save_docking_scores(self, dockfiles):
+    def save_docking_scores(self, dockfiles, idprefix='ZINC', id_column=2, score_column=7):
         ld = []
         enz = []
         for key in dockfiles.keys():
-            ld.append(self.set_dock_scores_pd(dockfiles[key], key))
+            ld.append(self.set_dock_scores_pd(dockfiles[key], key, 
+                                              idprefix=idprefix, id_column=id_column,
+                                              score_column=score_column))
             enz.append(key)
         dockscores = pd.DataFrame(ld, index=enz)
         dockscores.to_hdf(self.datafile, 'dock')
         print 'Docking scores saved'
 
-                                       
+    ######################################################################
+    # Chemical transformation/reaction scores
+    #
+    # Save a pandas panel associating reaction scores with enzymes, 
+    # and pairs of molecules
+    # Input: Dictionary of enzymes (keys) and lists of SMARTs pattern
+    #        chemical transformations (values)
+    #
+    ######################################################################
+    def save_reaction_scores(self, reactiondict):        
+        rxn_calc_dict = {}
+        for key in reactiondict.keys():
+            rxn_calc_dict[key] = self.reaction_calculations(reactiondict[key])
+            
+        rxn_panel = pd.Panel(rxn_calc_dict)
+        rxn_tc_mean = np.mean(rxn_panel.values)
+        rxn_tc_std = np.std(rxn_panel.values)
+
+        zscore_fxn = lambda x: (x - rxn_tc_mean)/rxn_tc_std
+        
+        rxn_panel = rxn_panel.apply(zscore_fxn)
+        rxn_panel.to_hdf(self.datafile, 'rsim')
+        print 'Chemical transformation/reaction similiarity scores saved'
+
+
     ######################################################################
     # SEA scores
     # 
