@@ -375,8 +375,6 @@ class ligandData(object):
                 if len(fields) > 1:
                     val = float(fields[score_column-1])
                     allscores.append(val)
-                    #if val <= 0.0:
-                    #    allscores.append(val)
             nar = np.array(allscores)
             mean = np.mean(nar)
             std = np.std(nar)
@@ -386,9 +384,8 @@ class ligandData(object):
             for line in lines:
                 fields = line.split()
                 if len(fields) > 1:
-                    #molid = fields[id_column-1].strip('C').strip()
                     molid = fields[id_column-1].strip()
-                    molid = '%s%s' % (idprefix, molid)
+                    #molid = '%s%s' % (idprefix, molid)
                     
                     if not self.keepmultiples:
                         molid = molid.split('_')[0]
