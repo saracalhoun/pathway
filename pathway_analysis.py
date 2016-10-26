@@ -44,6 +44,7 @@ def cluster_pathways(solutions, threshold=0.2):
         flatclusters = sch.fcluster(clusters, threshold, criterion='distance')
         return flatclusters
 
+
     splitsols = [s.split(' -> ') for s in solutions['strrepr']]
     #splitsols = [s.split(' -> ') for s in solutions]
     flatcl = make_clusters(splitsols, threshold=threshold)
@@ -66,7 +67,6 @@ def cluster_pathways(solutions, threshold=0.2):
         reprclusters[j] = clustersubset[maxidx]['strrepr']
     print '%d paths clustered into %d groups' % (len(splitsols), max(flatcl))
     return sub_groups, reprclusters
-
 
 
 def get_solution_subset(ref_proteins, solutions, keepsub=False):
