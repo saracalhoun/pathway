@@ -1,41 +1,49 @@
-from alignment.sequence import Sequence
-from alignment.vocabulary import Vocabulary
-from alignment.sequencealigner import SimpleScoring, GlobalSequenceAligner
-import scipy.spatial.distance as distance
-import scipy.cluster.hierarchy as sch
 import numpy as np
 
-
-def score_align(x, y):
-    a = Sequence(x)
-    b = Sequence(y)
-    v = Vocabulary()
-    aEncoded = v.encodeSequence(a)
-    bEncoded = v.encodeSequence(b)
-    scoring = SimpleScoring(2, -1)
-    aligner = GlobalSequenceAligner(scoring, -2)
-    score, encodeds = aligner.align(aEncoded, bEncoded, backtrace=True)
-    pI = 0.0
-    for e in encodeds:
-        alignment = v.decodeSequenceAlignment(e)
-        pI = max(pI, alignment.percentIdentity())
-    return 1 - pI/100.0
-
-
-def make_clusters(pathstrs, threshold=0.2):
-    distances = np.zeros((len(pathstrs), len(pathstrs)))
-    for i in range(len(pathstrs)):
-        for j in range(len(pathstrs)):
-            distances[i][j] = score_align(pathstrs[i], pathstrs[j])
-    
-    z = sch.distance.squareform(distances)
-    
-    clusters = sch.linkage(z, method='single')
-    flatclusters = sch.fcluster(clusters, threshold, criterion='distance')
-    return flatclusters
-
+# Functions:
+#       cluster_pathways
+#       score_align
+#       make_clusters
+#       get_solution_subset
+#       load_pathway_scores
+#       filter_good_scoring_solutions
 
 def cluster_pathways(solutions, threshold=0.2):
+    from alignment.sequence import Sequence
+    from alignment.vocabulary import Vocabulary
+    from alignment.sequencealigner import SimpleScoring, GlobalSequenceAligner
+    import scipy.spatial.distance as distance
+    import scipy.cluster.hierarchy as sch
+
+
+    def score_align(x, y):
+        a = Sequence(x)
+        b = Sequence(y)
+        v = Vocabulary()
+        aEncoded = v.encodeSequence(a)
+        bEncoded = v.encodeSequence(b)
+        scoring = SimpleScoring(2, -1)
+        aligner = GlobalSequenceAligner(scoring, -2)
+        score, encodeds = aligner.align(aEncoded, bEncoded, backtrace=True)
+        pI = 0.0
+        for e in encodeds:
+            alignment = v.decodeSequenceAlignment(e)
+            pI = max(pI, alignment.percentIdentity())
+        return 1 - pI/100.0
+
+
+    def make_clusters(pathstrs, threshold=0.2):
+        distances = np.zeros((len(pathstrs), len(pathstrs)))
+        for i in range(len(pathstrs)):
+            for j in range(len(pathstrs)):
+                distances[i][j] = score_align(pathstrs[i], pathstrs[j])
+        
+        z = sch.distance.squareform(distances)
+        
+        clusters = sch.linkage(z, method='single')
+        flatclusters = sch.fcluster(clusters, threshold, criterion='distance')
+        return flatclusters
+
     splitsols = [s.split(' -> ') for s in solutions['strrepr']]
     #splitsols = [s.split(' -> ') for s in solutions]
     flatcl = make_clusters(splitsols, threshold=threshold)
@@ -58,6 +66,7 @@ def cluster_pathways(solutions, threshold=0.2):
         reprclusters[j] = clustersubset[maxidx]['strrepr']
     print '%d paths clustered into %d groups' % (len(splitsols), max(flatcl))
     return sub_groups, reprclusters
+
 
 
 def get_solution_subset(ref_proteins, solutions, keepsub=False):
@@ -103,5 +112,6 @@ def filter_good_scoring_solutions(patharray, num_stdevs=1.):
     cu = maxscore - num_stdevs*st
     good_solutions = patharray[patharray['obj'] >= cu]
     print '%d paths filtered down to %d within %.1f standard deviation(s)' % (len(patharray), len(good_solutions), num_stdevs)
+    good_solutions = np.sort(good_solutions, order='obj')[::-1]
     return good_solutions
 
